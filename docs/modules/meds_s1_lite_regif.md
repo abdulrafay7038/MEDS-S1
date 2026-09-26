@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| **Status** | SKELETON — ports frozen, the implementation is T-05 work |
+| **Status** | COMPLETE — T-05 reference adapter |
 | **Project** | T-05, consumed by M-01 · M-02 · M-03 · R-07 |
 | **Spec** | INTERFACES.md §3 (I4), SPEC §24, ADR-0005 |
 | **Source** | `rtl/peripherals/meds_s1_lite_regif.sv` |
-| **Testbench** | `verif/unit/tb_meds_s1_lite_regif.sv` — **you write this** |
+| **Testbench** | `verif/unit/tb_meds_s1_lite_regif.sv`|
 
 ## Purpose
 
@@ -48,8 +48,23 @@ first deadlocks against a master that presents `W` first, which AXI4-Lite permit
 
 **Backpressure:** responses are held until accepted, with the payload stable.
 **Reset state:** all `valid` low, all `ready` low, no register access issued.
-**Latency:** _(G1: state it once you have built it — and state the throughput, because a peripheral
-author needs to know whether back-to-back accesses cost one cycle or three.)_
+**Latency:** an `AW`/`W` pair executes on the clock edge after the later of its two channel
+handshakes; an `AR` executes on the clock edge after its handshake. `B`/`R` becomes valid immediately
+after that execution edge. The register-file strobe and read-data sampling occur in that execution
+cycle.
+
+**Throughput:** the register-file side executes at most one access per clock. With an accepting
+master, alternating reads and writes can sustain one access per clock after the holding registers fill.
+A stream of only reads or only writes executes every other clock because its one-entry response holder
+is occupied until the following response handshake. When both directions are eligible, a one-bit
+round-robin grant chooses the direction opposite the prior grant; therefore neither direction can
+starve while its response channel can make progress.
+
+**Known read-width limitation:** AXI4-Lite read requests in `lite_req_t` carry neither byte strobes nor
+an access-size field. For `REG_DW = 32`, this adapter returns the lane selected by the address but
+cannot distinguish a legal 32-bit read from an unsupported 64-bit read at that address. The upstream
+width/alignment check must reject the latter under rule P3; write requests are distinguishable because
+their strobes are present and are rejected here when they span both lanes.
 
 ## Parameters
 
@@ -63,6 +78,6 @@ author needs to know whether back-to-back accesses cost one cycle or three.)_
 
 | Layer | Status | Where |
 |---|---|---|
-| Lint | clean (skeleton) | `make lint` |
-| Unit test | — | `verif/unit/tb_meds_s1_lite_regif.sv` |
+| Lint | clean | `make lint` |
+| Unit test | directed, backpressure, error, arbitration, and seeded-random sweeps at `REG_DW = 32` and `64` | `verif/unit/tb_meds_s1_lite_regif.sv` |
 | Mutation | — | run it at the G1 review; see the testbench header |
