@@ -602,7 +602,33 @@ module meds_s1_lite_regif_case
     check1("we low in reset",       we,           1'b0);
     check1("re low in reset",       re,           1'b0);
 
+    // Hold requests valid through reset release. READY must first rise from
+    // registered state; no request may be captured while READY is still low.
+    req.aw_valid = 1'b1;
+    req.w_valid  = 1'b1;
+    req.ar_valid = 1'b1;
     @(posedge rst_ni);
+    #1;
+    check1("AW waits for clock after reset", rsp.aw_ready, 1'b0);
+    check1("W waits for clock after reset", rsp.w_ready, 1'b0);
+    check1("AR waits for clock after reset", rsp.ar_ready, 1'b0);
+    @(posedge clk_i);
+    #1;
+    check1("AW ready after startup edge", rsp.aw_ready, 1'b1);
+    check1("W ready after startup edge", rsp.w_ready, 1'b1);
+    check1("AR ready after startup edge", rsp.ar_ready, 1'b1);
+    check1("no early write at reset release", we, 1'b0);
+    check1("no early read at reset release", re, 1'b0);
+    @(posedge clk_i);
+    @(negedge clk_i);
+    req.aw_valid = 1'b0;
+    req.w_valid  = 1'b0;
+    req.ar_valid = 1'b0;
+    collect_b("reset release write", 0, response);
+    check_resp("reset release write response", response, RESP_OKAY);
+    collect_r("reset release read", 0, data, response);
+    check_resp("reset release read response", response, RESP_OKAY);
+    check("reset release read data", data, '0);
     @(negedge clk_i);
     for (int unsigned index = 0; index < N_REGS; index++) begin
       shadow[index] = '0;

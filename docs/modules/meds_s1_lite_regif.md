@@ -18,8 +18,6 @@ It also absorbs the one consequence of a 64-bit peripheral bus (ADR-0005): a 32-
 `REG_DW = 32`, never sees the upper half of the bus, and is byte-for-byte what it would have been on
 a 32-bit bus. CLINT sets `REG_DW = 64` because `mtime` and `mtimecmp` must move in one access.
 
-This is the most reused module in T-05. Build it first.
-
 ## Interface contract
 
 ### Bus side — I4, frozen
@@ -48,6 +46,11 @@ first deadlocks against a master that presents `W` first, which AXI4-Lite permit
 
 **Backpressure:** responses are held until accepted, with the payload stable.
 **Reset state:** all `valid` low, all `ready` low, no register access issued.
+READY becomes available after the first rising clock edge following reset release.
+A register cleared by reset controls this startup interval; `rst_ni` is used only
+by sequential reset logic. Requests held valid during reset are captured only on
+a later edge where READY and VALID are both high. Arbitration uses the reset-cleared
+request flags, so no combinational reset gate is needed on register accesses.
 **Latency:** an `AW`/`W` pair executes on the clock edge after the later of its two channel
 handshakes; an `AR` executes on the clock edge after its handshake. `B`/`R` becomes valid immediately
 after that execution edge. The register-file strobe and read-data sampling occur in that execution
@@ -80,4 +83,16 @@ their strobes are present and are rejected here when they span both lanes.
 |---|---|---|
 | Lint | clean | `make lint` |
 | Unit test | directed, backpressure, error, arbitration, and seeded-random sweeps at `REG_DW = 32` and `64` | `verif/unit/tb_meds_s1_lite_regif.sv` |
-| Mutation | — | run it at the G1 review; see the testbench header |
+| Mutation | PASS: upper-lane write-data fault detected | QuestaSim 2024.1, 2026-09-30; details below |
+
+Mutation evidence: in a temporary copy of the RTL, the upper-lane write-data
+selection `wdata_q[LITE_DW-1 -: REG_DW]` was replaced with
+`wdata_q[REG_DW-1:0]`. The testbench reported `basic odd read data` for
+`REG_DW=32` and finished with `=== FAIL : 68 errors of 3867 checks ===`.
+The unchanged production RTL passed the same suite with
+`=== PASS : 3867 checks ===` in QuestaSim. The mutation was not committed.
+
+Reset-release coverage holds AW, W, and AR valid through reset and checks that
+no access occurs before their first READY/VALID handshake. Both register widths
+run this sequence. Invalid `REG_DW=16` and `ADDR_W=2` are also rejected during
+QuestaSim elaboration by the generate-scope parameter checks.

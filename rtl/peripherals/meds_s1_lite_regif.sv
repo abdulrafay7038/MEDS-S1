@@ -5,16 +5,12 @@
 // =============================================================================
 // meds_s1_lite_regif : AXI4-Lite slave -> register-file adapter [COMPLETE]
 //
-// The AXI4-Lite slave handshake, written ONCE.  Every MEDS-S1 peripheral
-// instantiates this and then implements only a register file.  CLINT, PLIC,
-// UART, SPI, GPIO and every accelerator MMIO window sit behind it, so this is
-// the single most reused module either of you will write this semester.  Build
-// it first, and build it carefully.
+// Shared AXI4-Lite adapter for peripheral register files. Independent AW, W,
+// and AR buffers accept requests in either order. A round-robin arbiter serves
+// one register access per cycle; registered B and R responses hold their
+// payloads until accepted. Supports 32-bit and 64-bit registers on the I4 bus.
 //
-// The PORT LIST below is frozen -- it is the contract four other projects will
-// code against.  The BODY is yours.
-//
-// Contract, stated once so your testbench has something to check against:
+// Register-file contract (port list frozen):
 //
 //   we_o / re_o   one-cycle strobes, never both in the same cycle
 //   addr_o        BYTE offset inside the window, aligned down to REG_DW/8, so a
@@ -26,8 +22,7 @@
 //   err_i         combinational from addr_o: "nothing is mapped here"
 //
 // Reference: INTERFACES.md section 3 (I4), ADR-0005.
-// Full contract: docs/modules/meds_s1_lite_regif.md -- read it before you start,
-// it is the specification you are implementing.
+// Full contract: docs/modules/meds_s1_lite_regif.md.
 // Testbench: verif/unit/tb_meds_s1_lite_regif.sv
 // =============================================================================
 
@@ -63,6 +58,8 @@ module meds_s1_lite_regif
   // Each AXI channel has exactly one place to wait.  In particular AW and W
   // have separate places, which is what makes W-before-AW safe.
   logic          aw_full_q, w_full_q, ar_full_q;
+  // READY remains low until the first clock edge after reset release.
+  logic          active_q;
   lite_addr_t    aw_addr_q, ar_addr_q;
   lite_data_t    wdata_q;
   lite_strb_t    wstrb_q;
@@ -85,15 +82,13 @@ module meds_s1_lite_regif
   // These are parameter errors, rather than behaviours which can be decoded
   // meaningfully at run time.  Keep the range check next to the width check so
   // a bad window cannot create an invalid part-select below.
-  initial begin
-    if ((ADDR_W < 3) || (ADDR_W > LITE_AW)) begin
-      $fatal(1, "meds_s1_lite_regif: ADDR_W (%0d) must be in [3, %0d]",
-             ADDR_W, LITE_AW);
-    end
-    if ((REG_DW != LITE_DW) && (REG_DW != (LITE_DW / 2))) begin
-      $fatal(1, "meds_s1_lite_regif: REG_DW (%0d) must be %0d or %0d",
-             REG_DW, LITE_DW / 2, LITE_DW);
-    end
+  if ((ADDR_W < 3) || (ADDR_W > LITE_AW)) begin : gen_bad_addr_width
+    $error("meds_s1_lite_regif: ADDR_W (%0d) must be in [3, %0d]",
+           ADDR_W, LITE_AW);
+  end
+  if ((REG_DW != LITE_DW) && (REG_DW != (LITE_DW / 2))) begin : gen_bad_reg_width
+    $error("meds_s1_lite_regif: REG_DW (%0d) must be %0d or %0d",
+           REG_DW, LITE_DW / 2, LITE_DW);
   end
 
   // A held response occupies its own channel until accepted.  No response
@@ -101,7 +96,7 @@ module meds_s1_lite_regif
   // response ready signal (R-C10).
   always_comb begin
     lite_rsp_o = LITE_RSP_IDLE;
-    if (rst_ni) begin
+    if (active_q) begin
       lite_rsp_o.aw_ready = !aw_full_q;
       lite_rsp_o.w_ready  = !w_full_q;
       lite_rsp_o.ar_ready = !ar_full_q;
@@ -123,18 +118,16 @@ module meds_s1_lite_regif
     execute_write   = 1'b0;
     execute_read    = 1'b0;
 
-    if (rst_ni) begin
-      if (write_candidate && read_candidate) begin
-        if (last_grant_write_q) begin
-          execute_read = 1'b1;
-        end else begin
-          execute_write = 1'b1;
-        end
-      end else if (write_candidate) begin
-        execute_write = 1'b1;
-      end else if (read_candidate) begin
+    if (write_candidate && read_candidate) begin
+      if (last_grant_write_q) begin
         execute_read = 1'b1;
+      end else begin
+        execute_write = 1'b1;
       end
+    end else if (write_candidate) begin
+      execute_write = 1'b1;
+    end else if (read_candidate) begin
+      execute_read = 1'b1;
     end
   end
 
@@ -197,6 +190,7 @@ module meds_s1_lite_regif
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
+      active_q            <= 1'b0;
       aw_full_q           <= 1'b0;
       w_full_q            <= 1'b0;
       ar_full_q           <= 1'b0;
@@ -211,18 +205,19 @@ module meds_s1_lite_regif
       rdata_q             <= '0;
       last_grant_write_q  <= 1'b0;
     end else begin
+      active_q <= 1'b1;
       // Channel capture is deliberately independent: no channel waits for a
       // sibling channel before accepting its own transaction.
-      if (!aw_full_q && lite_req_i.aw_valid) begin
+      if (lite_rsp_o.aw_ready && lite_req_i.aw_valid) begin
         aw_full_q <= 1'b1;
         aw_addr_q <= lite_req_i.aw.addr;
       end
-      if (!w_full_q && lite_req_i.w_valid) begin
+      if (lite_rsp_o.w_ready && lite_req_i.w_valid) begin
         w_full_q <= 1'b1;
         wdata_q  <= lite_req_i.w.data;
         wstrb_q  <= lite_req_i.w.strb;
       end
-      if (!ar_full_q && lite_req_i.ar_valid) begin
+      if (lite_rsp_o.ar_ready && lite_req_i.ar_valid) begin
         ar_full_q <= 1'b1;
         ar_addr_q <= lite_req_i.ar.addr;
       end
