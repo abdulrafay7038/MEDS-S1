@@ -1,27 +1,27 @@
 // Copyright 2026 Maktab-e-Digital Systems Lahore.
-// Licensed under the Apache License, Version 2.0, see LICENSE file for details.
-// SPDX-License-Identifier: Apache-2.0
-//
-// =============================================================================
-// meds_s1_lite_regif : AXI4-Lite slave -> register-file adapter [COMPLETE]
-//
-// Shared AXI4-Lite adapter for peripheral register files. Independent AW, W,
-// and AR buffers accept requests in either order. A round-robin arbiter serves
-// one register access per cycle; registered B and R responses hold their
-// payloads until accepted. Supports 32-bit and 64-bit registers on the I4 bus.
-//
-// Register-file contract (`lite_reg_req_t` / `lite_reg_rsp_t`):
-//
-//   reg_req_o.we/re       one-cycle strobes, never both in the same cycle
-//   reg_req_o.addr        byte offset, aligned down to REG_DW/8
-//   reg_req_o.wdata/strb  write data shifted to the register lane and byte enables
-//   reg_rsp_i.rdata       combinational read data, valid in the same cycle as re
-//   reg_rsp_i.err         combinational from addr: "nothing is mapped here"
-//
-// Reference: INTERFACES.md section 3 (I4).
-// Full contract: docs/modules/meds_s1_lite_regif.md.
-// Testbench: verif/unit/tb_meds_s1_lite_regif.sv
-// =============================================================================
+ // Licensed under the Apache License, Version 2.0, see LICENSE file for details.
+ // SPDX-License-Identifier: Apache-2.0
+ //
+ // =============================================================================
+ // meds_s1_lite_regif : AXI4-Lite slave -> register-file adapter [COMPLETE]
+ //
+ // Shared AXI4-Lite adapter for peripheral register files. Independent AW, W,
+ // and AR buffers accept requests in either order. A round-robin arbiter serves
+ // one register access per cycle; registered B and R responses hold their
+ // payloads until accepted. Supports 32-bit and 64-bit registers on the I4 bus.
+ //
+ // Register-file contract (`lite_reg_req_t` / `lite_reg_rsp_t`):
+ //
+ //   reg_req_o.we/re       one-cycle strobes, never both in the same cycle
+ //   reg_req_o.addr        byte offset, aligned down to REG_DW/8
+ //   reg_req_o.wdata/strb  write data shifted to the register lane and byte enables
+ //   reg_rsp_i.rdata       combinational read data, valid in the same cycle as re
+ //   reg_rsp_i.err         combinational from addr: "nothing is mapped here"
+ //
+ // Reference: INTERFACES.md section 3 (I4).
+ // Full contract: docs/modules/meds_s1_lite_regif.md.
+ // Testbench: verif/unit/tb_meds_s1_lite_regif.sv
+ // =============================================================================
 
 module meds_s1_lite_regif
   import meds_s1_lite_pkg::*;
@@ -155,11 +155,17 @@ module meds_s1_lite_regif
     write_spans_lanes = 1'b0;
     if (REG_DW == (LITE_DW / 2)) begin
       write_spans_lanes = (|wstrb_q[(LITE_SW / 2)-1:0]) &&
-                           (|wstrb_q[LITE_SW-1:LITE_SW / 2]);
+                          (|wstrb_q[LITE_SW-1:LITE_SW / 2]);
     end
+  end
+
+  // Keep the register write strobe independent of peripheral error decode.
+  assign we_o = execute_write && !write_spans_lanes;
+  assign re_o = execute_read;
+
+  // Peripheral decode errors still determine the write response.
+  always_comb begin
     write_error = err_i || write_spans_lanes;
-    we_o        = execute_write && !write_error;
-    re_o        = execute_read;
   end
 
   // Separate read data from address selection to keep decode feedback one-way.

@@ -46,12 +46,17 @@ Unused request bits are zero; unused response-data bits are ignored.
 | Port field | Dir | Meaning | Contract |
 |---|---|---|---|
 | `reg_req_o.addr` | out | **byte** offset in the window | aligned down to `REG_DW/8`; decode against literal register-map offsets |
-| `reg_req_o.we` | out | write strobe | one cycle; never high with `reg_req_o.re` |
+| `reg_req_o.we` | out | write strobe | one cycle; independent of `reg_rsp_i.err`; never high with `reg_req_o.re` |
 | `reg_req_o.re` | out | read strobe | one cycle; needed for read-side-effect registers |
 | `reg_req_o.wdata` | out | write data shifted out of its bus lane | low `REG_DW` bits |
 | `reg_req_o.wstrb` | out | byte enables | low `REG_DW/8` bits; a peripheral must honour them |
 | `reg_rsp_i.rdata` | in | read data | **combinational**, valid in the same cycle as `reg_req_o.re` |
 | `reg_rsp_i.err` | in | "nothing is mapped at `addr`" | combinational from `reg_req_o.addr`; becomes `SLVERR` |
+
+An unmapped write still asserts `reg_req_o.we`; the peripheral's address decode
+prevents a mapped register update, while `reg_rsp_i.err` returns `SLVERR`. A
+cross-lane write to a 32-bit register file suppresses `reg_req_o.we` and also
+returns `SLVERR`.
 
 **Backpressure:** responses are held until accepted, with the payload stable.
 **Reset state:** all `valid` low, all `ready` low, no register access issued.
@@ -92,10 +97,10 @@ their strobes are present and are rejected here when they span both lanes.
 | Layer | Status | Where |
 |---|---|---|
 | Lint | Clean on `s1_nano`, `s1_base`, `s1_ai`, `s1_linux` | Verilator 5.020, `make lint CONFIG=<config>` |
-| Unit test | `=== PASS : 5135 checks ===`; 2/2 unit benches passed, 9341 total checks | Verilator 5.020, 2026-10-06 |
+| Unit test | `=== PASS : 5260 checks ===` | Verilator 5.020, 2026-10-10 |
 | Mutation | All six deliberate faults detected | QuestaSim 2024.1, 2026-10-06; results below |
 
-The same testbench also passes in QuestaSim 2024.1 with 5139 checks. Mutation
+The same testbench also passes in QuestaSim 2024.1 with 5264 checks. Mutation
 runs below use temporary copies in QuestaSim; deliberate faults are not committed.
 
 The same test sequence runs at `REG_DW = 32` and `64`. It covers independent
@@ -110,12 +115,12 @@ production RTL passes the same testbench; no deliberate fault is committed.
 
 | Temporary change | Testbench result |
 |---|---|
-| Upper write lane selects lower-half data | `=== FAIL : 73 errors of 5139 checks ===` |
-| Every read/write tie favors writes | `=== FAIL : 8 errors of 5139 checks ===` |
-| Every read/write tie favors reads | `=== FAIL : 8 errors of 5139 checks ===` |
-| Remove register-address alignment | `=== FAIL : 20 errors of 5139 checks ===` |
-| W READY waits for AW VALID | `=== FAIL : 449 errors of 5123 checks ===` |
-| AW READY waits for W VALID | `=== FAIL : 453 errors of 5123 checks ===` |
+| Upper write lane selects lower-half data | `=== FAIL : 77 errors of 5264 checks ===` |
+| Every read/write tie favors writes | `=== FAIL : 8 errors of 5264 checks ===` |
+| Every read/write tie favors reads | `=== FAIL : 8 errors of 5264 checks ===` |
+| Remove register-address alignment | `=== FAIL : 20 errors of 5264 checks ===` |
+| W READY waits for AW VALID | `=== FAIL : 457 errors of 5248 checks ===` |
+| AW READY waits for W VALID | `=== FAIL : 463 errors of 5248 checks ===` |
 
 Generate-scope `$fatal(1, ...)` checks reject `REG_DW=16`, `ADDR_W=2`, and
 `ADDR_W=41` during QuestaSim elaboration (exit code 12 for each).

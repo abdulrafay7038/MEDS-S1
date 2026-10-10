@@ -147,7 +147,7 @@ module meds_s1_lite_regif_case
       for (int unsigned index = 0; index < N_REGS; index++) begin
         model[index] <= '0;
       end
-    end else if (we && !err) begin
+    end else if (we && (model_index < N_REGS)) begin
       for (int unsigned byte_index = 0; byte_index < REG_SW; byte_index++) begin
         if (wstrb[byte_index]) begin
           model[model_index][8*byte_index +: 8] <= wdata[8*byte_index +: 8];
@@ -699,14 +699,19 @@ module meds_s1_lite_regif_case
       check("unaligned read data", data, bus_data_for_reg(mapped_addr(1), shadow[1]));
     end
 
-    // Unmapped accesses use err_i and return SLVERR.  The known mapped register
-    // is read afterward to make the write-error case observable at the device.
-    write_raw("unmapped write", mapped_addr(N_REGS),
-              bus_data_for_reg(mapped_addr(N_REGS), partial_value),
-              bus_strb_for_reg(mapped_addr(N_REGS), all_strobes),
-              0, 0, 0, response);
+    // An unmapped write still strobes, but cannot update any mapped register;
+    // err_i supplies the SLVERR response.
+    send_write_channels("unmapped write", mapped_addr(N_REGS),
+                        bus_data_for_reg(mapped_addr(N_REGS), partial_value),
+                        bus_strb_for_reg(mapped_addr(N_REGS), all_strobes), 0, 0);
+    #1;
+    check1("unmapped write strobe independent of err", we, 1'b1);
+    check1("unmapped write asserts peripheral error", err, 1'b1);
+    collect_b("unmapped write", 0, response);
     check_resp("unmapped write response", response, RESP_SLVERR);
-    read_mapped("unmapped write leaves mapped state intact", 0, 0, 0);
+    for (int unsigned index = 0; index < N_REGS; index++) begin
+      read_mapped("unmapped write leaves mapped state intact", index, 0, 0);
+    end
 
     read_raw("unmapped read", mapped_addr(N_REGS), 0, 0, data, response);
     check_resp("unmapped read response", response, RESP_SLVERR);
@@ -715,8 +720,11 @@ module meds_s1_lite_regif_case
     // 32-bit lanes.  A readback proves the failed transaction had no side
     // effect, rather than merely receiving an error response.
     if (REG_DW == (LITE_DW / 2)) begin
-      write_raw("cross-lane write", mapped_addr(2),
-                64'hdeca_fbad_c001_d00d, {LITE_SW{1'b1}}, 0, 0, 0, response);
+      send_write_channels("cross-lane write", mapped_addr(2),
+                          64'hdeca_fbad_c001_d00d, {LITE_SW{1'b1}}, 0, 0);
+      #1;
+      check1("cross-lane write suppresses strobe", we, 1'b0);
+      collect_b("cross-lane write", 0, response);
       check_resp("cross-lane write response", response, RESP_SLVERR);
       read_mapped("cross-lane write leaves register intact", 2, 0, 0);
     end
